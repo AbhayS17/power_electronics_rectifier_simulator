@@ -1,0 +1,157 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rectifier Lab</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f3f5f7;--card:#fff;--ink:#1c2430;--mut:#6a7686;--ln:#d5dbe2;--a:#d9480f;--b:#2b8a3e;--c:#1971c2;--o:#6741d9;--on:#f08c00}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#12161c;--card:#1a2029;--ink:#e6ebf1;--mut:#8f9bab;--ln:#2e3744;--a:#ff922b;--b:#69db7c;--c:#4dabf7;--o:#9775fa;--on:#ffd43b}}
+:root[data-theme="dark"]{--bg:#12161c;--card:#1a2029;--ink:#e6ebf1;--mut:#8f9bab;--ln:#2e3744;--a:#ff922b;--b:#69db7c;--c:#4dabf7;--o:#9775fa;--on:#ffd43b}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:1000px;margin:0 auto;padding:12px}
+h1{font-size:20px;margin:0 0 2px}h2{font-size:14px;margin:0 0 8px}p{margin:0}
+.mut{color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:10px;padding:12px 14px;margin:0 0 12px}
+.grid{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:12px}
+.grid .card{margin:0}.grid{margin-bottom:12px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}}
+.row{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:end;margin-bottom:8px}.row:last-child{margin:0}
+label{display:flex;flex-direction:column;font-size:13px;gap:3px}
+.sl{min-width:150px;flex:1}
+input[type=range]{width:100%}
+select,button{font:inherit;padding:5px 8px;border-radius:8px;border:1px solid var(--ln);background:var(--bg);color:var(--ink)}
+button{cursor:pointer}
+table{width:100%;border-collapse:collapse}td{padding:4px 0;border-bottom:1px solid var(--ln)}td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+canvas{display:block;width:100%}
+#w1{height:230px}#w2{height:180px}
+</style></head><body><main>
+<h1>Rectifier Lab</h1>
+<p class="mut" style="margin-bottom:10px">Ideal devices, R–L load, steady state. The cursor sweeps the waveforms; the schematic lights up whatever conducts at that instant.</p>
+<section class="card" id="ctl"></section>
+<div class="grid">
+<section class="card"><h2 id="ttl"></h2><canvas id="sch" width="920" height="600" style="aspect-ratio:460/300"></canvas><p class="mut" id="now" style="margin-top:6px"></p></section>
+<section class="card"><h2>Measurements (one cycle)</h2><div id="st"></div></section>
+</div>
+<section class="card"><h2>Voltages <span class="mut" style="font-weight:400">· dashed ticks mark the firing instants</span></h2><canvas id="w1"></canvas></section>
+<section class="card"><h2>Currents</h2><canvas id="w2"></canvas></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const P={ph:'3',wv:'f',dv:'t',al:30,R:10,L:50,Vm:325,sp:1,run:true};
+const S=720,CY=50,TP=2*Math.PI,N2=2*S;
+let D=null,K={},pos=0;
+const SL=[['al','Firing angle α',0,180,1,'°'],['R','Load R',1,50,1,'Ω'],['L','Load L',0,300,5,'mH'],['Vm','Phase peak Vm',50,400,5,'V'],['sp','Animation speed',0,3,.1,'×']];
+const sel=(k,l,o)=>`<label>${l}<select id="${k}">${o.map(([v,t])=>`<option value="${v}"${P[k]==v?' selected':''}>${t}</option>`).join('')}</select></label>`;
+$('ctl').innerHTML=`<div class="row">`+sel('ph','Supply',[['1','1-phase'],['3','3-phase']])+sel('wv','Rectifier',[['h','Half-wave'],['f','Full-wave (bridge)']])+sel('dv','Devices',[['d','Diodes'],['t','Thyristors']])+`<button id="pp">Pause</button></div><div class="row">`+SL.map(([k,l,a,b,s,u])=>`<label class="sl" id="s_${k}">${l}: <b id="v_${k}">${P[k]}</b> ${u}<input type="range" id="r_${k}" min="${a}" max="${b}" step="${s}" value="${P[k]}"></label>`).join('')+`</div>`;
+['ph','wv','dv'].forEach(k=>$(k).onchange=e=>{P[k]=e.target.value;run()});
+SL.forEach(([k])=>$('r_'+k).oninput=e=>{P[k]=+e.target.value;$('v_'+k).textContent=P[k];if(k!='sp')run()});
+$('pp').onclick=()=>{P.run=!P.run;$('pp').textContent=P.run?'Pause':'Play'};
+
+const pot=(th,q)=>q==1?[Math.sin(th),0]:[Math.sin(th),Math.sin(th-2.0943951),Math.sin(th+2.0943951)];
+function sim(){
+ const q=+P.ph,full=P.wv=='f',scr=P.dv=='t',nP=q==1?(full?2:1):3,nN=full?nP:1;
+ const x=Math.max(2*Math.PI*50*P.L/1000/P.R,1e-4),dth=TP/S,dec=Math.exp(-dth/x);
+ const nat=q==1?[0,Math.PI]:[Math.PI/6,5*Math.PI/6,1.5*Math.PI],al=scr?P.al*Math.PI/180:0,gw=Math.PI/3;
+ const gt=(th,k,o)=>!scr||((((th-nat[k]-o*Math.PI-al)%TP)+TP)%TP)<gw;
+ const f=()=>new Float32Array(N2),vo=f(),io=f(),ia=f(),T=[f(),f(),f()],oP=new Int8Array(N2),oN=new Int8Array(N2);
+ let i=0,ip=-1,iN=-1;
+ for(let n=0;n<S*CY;n++){
+  const th=n*dth,t=pot(th,q),VP=t.slice(0,nP),VN=full?VP:[0];
+  let bp=ip,bn=iN;
+  if(ip>=0){
+   for(let k=0;k<nP;k++)if(gt(th,k,0)&&VP[k]>VP[bp])bp=k;
+   for(let m=0;m<nN;m++)if((!full||gt(th,m,1))&&VN[m]<VN[bn])bn=m;
+   ip=bp;iN=bn;
+  }else{
+   bp=-1;bn=-1;
+   for(let k=0;k<nP;k++)if(gt(th,k,0)&&(bp<0||VP[k]>VP[bp]))bp=k;
+   for(let m=0;m<nN;m++)if((!full||gt(th,m,1))&&(bn<0||VN[m]<VN[bn]))bn=m;
+   if(bp>=0&&bn>=0&&VP[bp]-VN[bn]>1e-9){ip=bp;iN=bn}
+  }
+  let v=0;
+  if(ip>=0){v=VP[ip]-VN[iN];i=v+(i-v)*dec;if(i<=1e-9){i=0;ip=iN=-1;v=0}}
+  const j=n-S*(CY-2);
+  if(j>=0){vo[j]=v;io[j]=i;ia[j]=(ip==0?i:0)-(full&&iN==0?i:0);oP[j]=ip;oN[j]=iN;for(let c=0;c<3;c++)T[c][j]=t[c]||0}
+ }
+ const fire=[];
+ for(let cy=0;cy<2;cy++)for(let k=0;k<nP;k++){const a=nat[k]+al;fire.push(((a*180/Math.PI+360*cy)%720));if(full)fire.push(((a*180/Math.PI+180+360*cy)%720))}
+ const Vm=P.Vm,Im=Vm/P.R,sc=(A,m)=>A.map(v=>v*m);
+ D={q,full,scr,nP,al,oP,oN,vo,io,fire:[...new Set(fire)],sv:T.map(a=>sc(a,Vm)),svo:sc(vo,Vm),sio:sc(io,Im),sia:sc(ia,Im)};
+}
+function stats(){
+ const {q,full,scr}=D,Vm=P.Vm,Im=Vm/P.R,a=D.al;
+ const sl=A=>A.subarray(S,N2),m=A=>{let s=0;for(const v of sl(A))s+=v;return s/S},r=A=>{let s=0;for(const v of sl(A))s+=v*v;return Math.sqrt(s/S)};
+ const vd=m(D.vo)*Vm,vr=r(D.vo)*Vm,id=m(D.io)*Im,ir=r(D.io)*Im,ff=vd>1e-6?vr/vd:NaN,rf=ff>=1?Math.sqrt(ff*ff-1):NaN;
+ const cont=Math.min(...sl(D.io))>1e-9,c=Math.cos;
+ const th=q==1?(full?(1+c(a))/Math.PI:(1+c(a))/(2*Math.PI)):!full?(a<=Math.PI/6?3*Math.sqrt(3)*c(a)/(2*Math.PI):3*(1+c(a+Math.PI/6))/(2*Math.PI)):Math.sqrt(3)*(a<=Math.PI/3?3*c(a)/Math.PI:3*(1+c(a+Math.PI/3))/Math.PI);
+ const fx=(v,d)=>isFinite(v)?v.toFixed(d):'–',pulse=q==1?(full?2:1):(full?6:3);
+ $('st').innerHTML=`<table>`+[['Mean output Vdc',fx(vd,1)+' V'],['RMS output Vrms',fx(vr,1)+' V'],['Mean load current',fx(id,2)+' A'],['RMS load current',fx(ir,2)+' A'],['Form factor',fx(ff,3)],['Ripple factor',fx(rf,3)],['Output pulses / cycle',pulse],['Load current',cont?'continuous':'discontinuous'],['Vdc, R-load formula',P.L==0?fx(th*Vm,1)+' V':'set L = 0 to compare']].map(([k,v])=>`<tr><td class="mut">${k}</td><td>${v}</td></tr>`).join('')+`</table>`;
+ $('ttl').textContent=`${q}-phase ${full?'full-wave (bridge)':'half-wave'} ${scr?'controlled, α = '+P.al+'°':'uncontrolled'}`;
+}
+function run(){
+ $('s_al').style.opacity=P.dv=='t'?1:.4;$('r_al').disabled=P.dv!='t';
+ sim();stats();
+}
+function colors(){const s=getComputedStyle(document.documentElement);['bg','card','ink','mut','ln','a','b','c','o','on'].forEach(n=>K[n]=s.getPropertyValue('--'+n).trim())}
+
+function sch(idx){
+ const c=$('sch'),g=c.getContext('2d');g.setTransform(2,0,0,2,0,0);g.clearRect(0,0,460,300);
+ const {q,full,scr,nP}=D,ip=D.oP[idx],iN=D.oN[idx],on=ip>=0;
+ const xs=q==1?(full?[190,280]:[190]):[170,250,330],wy=q==1?[120,180]:[110,150,190],pc=['a','b','c'],pl=scr?'T':'D',nl=q==1?[4,2]:[4,6,2],pn=[1,3,5];
+ const W=(pts,hot)=>{g.strokeStyle=hot?K.on:K.ink;g.lineWidth=hot?3:1.5;g.beginPath();pts.forEach((p,n)=>n?g.lineTo(p[0],p[1]):g.moveTo(p[0],p[1]));g.stroke()};
+ const txt=(t,x,y,col,al,f)=>{g.fillStyle=col;g.font=f||'11px system-ui,sans-serif';g.textAlign=al||'center';g.textBaseline='middle';g.fillText(t,x,y)};
+ const circ=(x,y,col,t)=>{g.beginPath();g.arc(x,y,16,0,7);g.fillStyle=K.card;g.fill();g.strokeStyle=col;g.lineWidth=2;g.stroke();txt(t,x,y,col,'center','bold 12px system-ui,sans-serif')};
+ const dev=(x,yT,yB,yc,hot,lab)=>{
+  W([[x,yB],[x,yT]],hot);
+  g.fillStyle=hot?K.on:K.card;g.strokeStyle=hot?K.on:K.ink;g.lineWidth=1.8;
+  g.beginPath();g.moveTo(x-8,yc+8);g.lineTo(x+8,yc+8);g.lineTo(x,yc-8);g.closePath();g.fill();g.stroke();
+  g.beginPath();g.moveTo(x-9,yc-8);g.lineTo(x+9,yc-8);g.stroke();
+  if(scr){g.beginPath();g.moveTo(x+4,yc);g.lineTo(x+15,yc+9);g.stroke()}
+  txt(lab,x-14,yc,hot?K.on:K.ink,'right','bold 11px system-ui,sans-serif');
+ };
+ const x0=xs[0];
+ W([[x0,40],[410,40]],on);W([[q==1&&!full?50:q==3&&!full?22:x0,260],[410,260]],on);
+ if(q==3){W([[22,110],[22,190]]);for(let k=0;k<3;k++){W([[22,wy[k]],[44,wy[k]]]);circ(60,wy[k],K[pc[k]],'v'+pc[k]);W([[76,wy[k]],[xs[k],wy[k]]])}if(!full)W([[22,190],[22,260]])}
+ else{circ(50,150,K.a,'vs');W([[50,134],[50,120],[xs[0],120]]);if(full)W([[50,166],[50,180],[xs[1],180]]);else W([[50,166],[50,260]])}
+ for(let k=0;k<nP;k++)dev(xs[k],40,wy[k],40+(wy[k]-40)*.5,ip==k,pl+pn[k]);
+ if(full)for(let k=0;k<nP;k++)dev(xs[k],wy[k],260,wy[k]+(260-wy[k])*.65,iN==k,pl+nl[k]);
+ for(let k=0;k<nP;k++){g.beginPath();g.arc(xs[k],wy[k],3,0,7);g.fillStyle=K.ink;g.fill()}
+ W([[410,40],[410,105]],on);W([[410,149],[410,160]],on);W([[410,208],[410,260]],on);
+ g.strokeStyle=on?K.on:K.ink;g.lineWidth=on?3:1.5;g.strokeRect(402,105,16,44);
+ g.beginPath();for(let n=0;n<4;n++)g.arc(410,166+n*12,6,-1.5708,1.5708);g.stroke();
+ txt('R',432,127,K.mut);txt('L',432,184,K.mut);
+ txt('+',386,48,K.mut);txt('vo',386,150,K.mut);txt('−',386,254,K.mut);
+ const deg=Math.round(idx*360/S)%720;
+ $('now').textContent=`θ = ${deg}° · conducting: `+(on?pl+pn[ip]+(full?' + '+pl+nl[iN]:(q==3?' (return via neutral)':' (return via source)')):'none, load current is zero');
+}
+
+function plot(c,series,y0,y1,idx,marks){
+ const w=c.clientWidth,h=c.clientHeight;if(c.width!=w*2){c.width=w*2;c.height=h*2}
+ const g=c.getContext('2d');g.setTransform(2,0,0,2,0,0);g.clearRect(0,0,w,h);
+ const L=46,Rr=10,Tp=22,B=22,pw=w-L-Rr,ph=h-Tp-B,X=n=>L+pw*n/N2,Y=v=>Tp+ph*(y1-v)/(y1-y0);
+ g.font='11px system-ui,sans-serif';g.lineWidth=1;g.strokeStyle=K.ln;g.fillStyle=K.mut;g.textBaseline='middle';
+ for(let d=0;d<=720;d+=90){const x=L+pw*d/720;g.beginPath();g.moveTo(x,Tp);g.lineTo(x,Tp+ph);g.stroke();if(d%180==0){g.textAlign='center';g.fillText(d+'°',x,h-9)}}
+ g.textAlign='right';[y0,y1].forEach(v=>g.fillText(Math.abs(v)>=100?v.toFixed(0):v.toFixed(1),L-5,Y(v)));g.fillText('0',L-5,Y(0));
+ g.strokeStyle=K.mut;g.beginPath();g.moveTo(L,Y(0));g.lineTo(L+pw,Y(0));g.stroke();
+ if(marks){g.setLineDash([3,3]);g.strokeStyle=K.on;marks.forEach(d=>{const x=L+pw*d/720;g.beginPath();g.moveTo(x,Tp);g.lineTo(x,Tp+ph);g.stroke()});g.setLineDash([])}
+ let lx=L;
+ series.forEach(s=>{
+  g.beginPath();for(let n=0;n<N2;n++){n?g.lineTo(X(n),Y(s.d[n])):g.moveTo(X(n),Y(s.d[n]))}
+  g.strokeStyle=K[s.c];g.lineWidth=s.w;g.stroke();
+  if(s.fill){g.lineTo(X(N2-1),Y(0));g.lineTo(X(0),Y(0));g.closePath();g.globalAlpha=.16;g.fillStyle=K[s.c];g.fill();g.globalAlpha=1}
+  g.fillStyle=K[s.c];g.fillRect(lx,7,10,4);g.fillStyle=K.mut;g.textAlign='left';g.fillText(s.n,lx+14,9);lx+=g.measureText(s.n).width+34;
+ });
+ g.strokeStyle=K.ink;g.lineWidth=1.2;g.beginPath();g.moveTo(X(idx),Tp);g.lineTo(X(idx),Tp+ph);g.stroke();
+ series.forEach(s=>{g.beginPath();g.arc(X(idx),Y(s.d[idx]),3.5,0,7);g.fillStyle=K[s.c];g.fill()});
+}
+function draw(){
+ if(!D)return;colors();const idx=Math.floor(pos)%N2,Vm=P.Vm;
+ sch(idx);
+ const vs=D.q==3?[{d:D.sv[0],c:'a',n:'va',w:1.2},{d:D.sv[1],c:'b',n:'vb',w:1.2},{d:D.sv[2],c:'c',n:'vc',w:1.2}]:[{d:D.sv[0],c:'a',n:'vs',w:1.2}];
+ plot($('w1'),[...vs,{d:D.svo,c:'o',n:'vo (load)',w:2.5,fill:1}],-1.15*Vm,1.15*Vm,idx,D.scr?D.fire:null);
+ const mx=Math.max(...D.sio,...D.sia,1e-6),mn=Math.min(0,...D.sia);
+ plot($('w2'),[{d:D.sio,c:'o',n:'io (load)',w:2.5},{d:D.sia,c:'a',n:'ia (supply, phase a)',w:1.5}],mn*1.15,mx*1.15,idx,null);
+}
+let last=0;
+function frame(t){const dt=Math.min(.1,(t-last)/1000);last=t;if(P.run)pos=(pos+P.sp*N2/8*dt)%N2;draw();requestAnimationFrame(frame)}
+run();requestAnimationFrame(frame);
+</script></body></html>
